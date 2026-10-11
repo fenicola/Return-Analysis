@@ -1,9 +1,7 @@
-streamlit
+streamlit>=1.45
 numpy
 pandas
 plotly
 scipy
 statsmodels
-quantstats
 openpyxl
- 

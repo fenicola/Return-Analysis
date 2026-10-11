@@ -1,634 +1,530 @@
 """
-NVIDIA (NVDA) — Investment Analysis Dashboard
+NVIDIA (NVDA) — Equity Analysis Dashboard
 Carica i dati da nvda_analysis.xlsx (generato dal notebook NVIDIA.ipynb)
 
 Run with: streamlit run nvda_dashboard.py
 """
 
-import streamlit as st
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from scipy import stats
-from scipy.stats import norm
 import statsmodels.api as sm
-import quantstats as qs
-import warnings
-warnings.filterwarnings("ignore")
+import streamlit as st
+from plotly.subplots import make_subplots
+from scipy import stats
 
 # ── PAGE CONFIG ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="NVDA · Investment Analysis",
-    page_icon="📊",
+    page_title="NVDA · Equity Analysis",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+# ── PALETTE ──────────────────────────────────────────────────────────────────
+BG       = "#0b0f14"
+SURFACE  = "#121821"
+BORDER   = "#1f2a37"
+TEXT     = "#e6edf3"
+MUTED    = "#8b98a9"
+FAINT    = "#5b6878"
+NVDA_COL = "#76b900"   # NVIDIA green
+MKT_COL  = "#8ea3c7"   # mercato: grigio-blu neutro
+NEG      = "#ff6b6b"
+AMBER    = "#f5b942"
+GRID     = "rgba(139,152,169,0.10)"
+
+TRADING_DAYS = 252
+GITHUB_URL = "https://github.com/fenicola/Return-Analysis"
+
 # ── CUSTOM CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-/* ─── Base ─────────────────────────────────────────── */
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-    background-color: #09090f;
-    color: #e8e8ef;
-}
-.stApp { background: #09090f; }
+html, body, [class*="css"], .stApp {{
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: {BG};
+    color: {TEXT};
+}}
+.block-container {{ padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1280px; }}
+header[data-testid="stHeader"] {{ background: transparent; }}
 
-/* ─── Header strip ──────────────────────────────────── */
-.hero {
-    background: linear-gradient(135deg, #0d0d1a 0%, #101028 50%, #0a1a2e 100%);
-    border: 1px solid rgba(100,120,255,0.18);
-    border-radius: 16px;
-    padding: 40px 48px 36px;
-    margin-bottom: 28px;
-    position: relative;
-    overflow: hidden;
-}
-.hero::before {
-    content: '';
-    position: absolute; inset: 0;
-    background: radial-gradient(ellipse at 80% 50%, rgba(118,85,255,0.12) 0%, transparent 65%);
-}
-.hero-tag {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    color: #7655ff;
-    margin-bottom: 10px;
-}
-.hero-title {
-    font-family: 'DM Serif Display', serif;
-    font-size: 52px;
-    line-height: 1.05;
-    margin: 0 0 8px;
-    background: linear-gradient(90deg, #fff 0%, #a8b4ff 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-.hero-subtitle {
-    color: #8888aa;
-    font-size: 15px;
-    font-weight: 300;
-    letter-spacing: 0.3px;
-}
+/* Hero */
+.hero {{
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end;
+    gap: 20px; padding: 6px 0 22px; border-bottom: 1px solid {BORDER}; margin-bottom: 18px;
+}}
+.ticker {{
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; letter-spacing: 2px;
+    color: {NVDA_COL}; text-transform: uppercase; margin-bottom: 6px;
+}}
+.hero h1 {{
+    font-size: clamp(30px, 5vw, 44px); font-weight: 700; line-height: 1.05;
+    margin: 0; padding: 0; color: {TEXT}; letter-spacing: -0.5px;
+}}
+.hero .sub {{ color: {MUTED}; font-size: 14px; margin-top: 8px; }}
+.hero-stat {{ text-align: right; }}
+.hero-stat .v {{ font-family: 'IBM Plex Mono', monospace; font-size: 30px; color: {NVDA_COL}; }}
+.hero-stat .l {{ color: {MUTED}; font-size: 12px; }}
+@media (max-width: 900px) {{ .hero-stat {{ text-align: left; }} }}
 
-/* ─── Section labels ────────────────────────────────── */
-.section-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    color: #7655ff;
-    margin: 40px 0 14px;
-}
-
-/* ─── KPI cards ─────────────────────────────────────── */
-.kpi-card {
-    background: linear-gradient(145deg, #111120, #14142a);
-    border: 1px solid rgba(118,85,255,0.15);
-    border-radius: 14px;
-    padding: 22px 24px;
-    text-align: left;
-    transition: border-color .25s;
-}
-.kpi-card:hover { border-color: rgba(118,85,255,0.4); }
-.kpi-label {
-    font-size: 11px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: #66668a;
-    margin-bottom: 8px;
-}
-.kpi-value {
-    font-family: 'DM Serif Display', serif;
-    font-size: 32px;
-    line-height: 1;
-    color: #fff;
-}
-.kpi-value.positive { color: #4ade80; }
-.kpi-value.negative { color: #f87171; }
-.kpi-value.neutral  { color: #a78bfa; }
-.kpi-sub {
-    font-size: 11px;
-    color: #55556a;
-    margin-top: 6px;
-}
-
-/* ─── Regression table ──────────────────────────────── */
-.reg-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-.reg-table th {
-    background: rgba(118,85,255,0.12);
-    color: #a78bfa;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
+/* Section headers */
+.section {{ margin: 38px 0 6px; }}
+.section .num {{
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: {NVDA_COL};
     letter-spacing: 2px;
-    text-transform: uppercase;
-    padding: 10px 16px;
-    text-align: left;
-    border-bottom: 1px solid rgba(118,85,255,0.2);
-}
-.reg-table td {
-    padding: 12px 16px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-    color: #d0d0e8;
-    font-family: 'JetBrains Mono', monospace;
-}
-.reg-table tr:last-child td { border-bottom: none; }
-.reg-table tr:hover td { background: rgba(118,85,255,0.06); }
-.sig { color: #4ade80; font-size: 11px; }
+}}
+.section h2 {{ font-size: 21px; font-weight: 600; margin: 2px 0 2px; padding: 0; color: {TEXT}; }}
+.section p {{ color: {MUTED}; font-size: 13.5px; margin: 0; max-width: 820px; }}
 
-/* ─── Divider ───────────────────────────────────────── */
-.fancy-divider {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(118,85,255,0.4), transparent);
-    margin: 40px 0;
-}
+/* KPI grid */
+.kpi-grid {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+    gap: 12px; margin-top: 14px;
+}}
+.kpi-grid.four {{ grid-template-columns: repeat(4, 1fr); }}
+@media (max-width: 900px) {{ .kpi-grid.four {{ grid-template-columns: repeat(2, 1fr); }} }}
+.chart-title {{ font-size: 14px; font-weight: 600; color: {TEXT}; margin: 18px 0 -6px; }}
+.kpi {{
+    background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 10px;
+    padding: 16px 18px;
+}}
+.kpi .l {{ font-size: 12px; color: {MUTED}; margin-bottom: 8px; }}
+.kpi .v {{ font-family: 'IBM Plex Mono', monospace; font-size: 24px; color: {TEXT}; line-height: 1.1; }}
+.kpi .m {{ font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: {FAINT}; margin-top: 6px; }}
+.kpi .m b {{ color: {MKT_COL}; font-weight: 500; }}
 
-/* ─── Info box ──────────────────────────────────────── */
-.info-box {
-    background: rgba(118,85,255,0.06);
-    border-left: 3px solid #7655ff;
-    border-radius: 0 10px 10px 0;
-    padding: 16px 20px;
-    font-size: 13px;
-    color: #9999bb;
-    line-height: 1.7;
-}
+/* Legend chips */
+.legend {{ display: flex; gap: 18px; font-size: 12.5px; color: {MUTED}; margin-top: 10px; }}
+.dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }}
+
+/* Regression table */
+.reg-table {{ width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; }}
+.reg-table th {{
+    text-align: right; color: {MUTED}; font-weight: 500; font-size: 12px;
+    padding: 8px 10px; border-bottom: 1px solid {BORDER};
+}}
+.reg-table th:first-child, .reg-table td:first-child {{ text-align: left; }}
+.reg-table td {{
+    text-align: right; padding: 9px 10px; border-bottom: 1px solid {BORDER};
+    font-family: 'IBM Plex Mono', monospace; color: {TEXT};
+}}
+.reg-table td:first-child {{ font-family: 'IBM Plex Sans', sans-serif; color: {MUTED}; }}
+.sig {{ color: {NVDA_COL}; }}
+
+.note {{
+    background: {SURFACE}; border: 1px solid {BORDER}; border-left: 3px solid {NVDA_COL};
+    border-radius: 8px; padding: 14px 18px; font-size: 13.5px; color: {MUTED}; line-height: 1.65;
+}}
+.note b {{ color: {TEXT}; font-weight: 600; }}
+
+.footer {{
+    margin-top: 48px; padding-top: 18px; border-top: 1px solid {BORDER};
+    color: {FAINT}; font-size: 12.5px; line-height: 1.7;
+}}
+.footer a {{ color: {MKT_COL}; }}
 </style>
 """, unsafe_allow_html=True)
 
 
 # ── DATA LOADING DA EXCEL ─────────────────────────────────────────────────────
-from pathlib import Path
 EXCEL_PATH = Path(__file__).parent / "nvda_analysis.xlsx"  # sempre nella cartella dello script
 
+
 @st.cache_data(show_spinner=False)
-def load_from_excel(path: str):
+def load_data(path: Path) -> pd.DataFrame:
     """
-    Carica i dati pre-calcolati dal notebook (nvda_analysis.xlsx).
-    Foglio NVDA_Prices  → prezzi Adj Close
-    Foglio ER_Analysis  → Mkt-Rf, ER, RF (excess returns già calcolati)
+    Unisce ER_Analysis (excess return NVDA e mercato, in %) con il risk-free
+    del foglio FamaFrench_3F, e ricostruisce i rendimenti totali giornalieri.
     """
     xls = pd.ExcelFile(path)
+    er = pd.read_excel(xls, sheet_name="ER_Analysis", index_col=0, parse_dates=True)
+    ff = pd.read_excel(xls, sheet_name="FamaFrench_3F", index_col=0, parse_dates=True)
 
-    # Prezzi
-    prices = pd.read_excel(xls, sheet_name="NVDA_Prices", index_col=0, parse_dates=True)
-    prices.columns = ["Adj Close"]          # rinomina per sicurezza
+    df = er.rename(columns={"Mkt-Rf": "MKT_ER", "ER": "NVDA_ER"})
+    df = df.join(ff["RF"], how="left")
+    df["RF"] = df["RF"].fillna(0.0)
+    df = df.dropna(subset=["MKT_ER", "NVDA_ER"]).sort_index()
 
-    # Excess returns + fattori
-    df = pd.read_excel(xls, sheet_name="ER_Analysis", index_col=0, parse_dates=True)
-    # Le colonne attese sono: Mkt-Rf, ER  (RF è opzionale ma presente)
-    if "RF" not in df.columns:
-        df["RF"] = 0.0
-
-    return prices, df
+    # Rendimenti in decimale
+    df["nvda_x"] = df["NVDA_ER"] / 100           # excess
+    df["mkt_x"]  = df["MKT_ER"] / 100
+    df["nvda"]   = (df["NVDA_ER"] + df["RF"]) / 100  # totale
+    df["mkt"]    = (df["MKT_ER"] + df["RF"]) / 100
+    return df
 
 
 # ── METRICS ──────────────────────────────────────────────────────────────────
-def compute_metrics(er_series: pd.Series, rf_series: pd.Series):
-    """
-    Calcola le metriche usando quantstats, identico al notebook NVIDIA.ipynb.
-    quantstats vuole i rendimenti in decimale (non in percentuale).
-    """
-    rets = er_series.dropna() / 100
+def drawdown(total: pd.Series) -> pd.Series:
+    wealth = (1 + total).cumprod()
+    return wealth / wealth.cummax() - 1
 
-    if len(rets) == 0:
-        nan = float("nan")
-        return dict(cagr=nan, vol=nan, skew=nan, kurt=nan,
-                    sharpe=nan, sortino=nan, max_dd=nan,
-                    var5=nan, var1=nan)
 
+def risk_metrics(total: pd.Series, excess: pd.Series) -> dict:
+    n = len(total)
+    growth = (1 + total).prod()
+    downside = np.sqrt((excess.clip(upper=0) ** 2).mean())
+    var95 = np.percentile(total, 5)
     return dict(
-        cagr    = qs.stats.cagr(rets),
-        vol     = qs.stats.volatility(rets),
-        skew    = float(qs.stats.skew(rets)),
-        kurt    = float(qs.stats.kurtosis(rets)),
-        sharpe  = float(qs.stats.sharpe(rets)),
-        sortino = float(qs.stats.sortino(rets)),
-        max_dd  = qs.stats.max_drawdown(rets),
-        var5    = qs.stats.value_at_risk(rets, sigma=0.05),
-        var1    = qs.stats.value_at_risk(rets, sigma=0.01),
+        total_ret = growth - 1,
+        cagr      = growth ** (TRADING_DAYS / n) - 1,
+        vol       = total.std() * np.sqrt(TRADING_DAYS),
+        sharpe    = excess.mean() / excess.std() * np.sqrt(TRADING_DAYS),
+        sortino   = excess.mean() / downside * np.sqrt(TRADING_DAYS),
+        max_dd    = drawdown(total).min(),
+        var95     = var95,
+        cvar95    = total[total <= var95].mean(),
     )
 
 
-def run_capm(df: pd.DataFrame):
-    x = sm.add_constant(df["Mkt-Rf"])
-    return sm.OLS(df["ER"], x).fit()
+def run_capm(d: pd.DataFrame):
+    x = sm.add_constant(d["MKT_ER"])
+    return sm.OLS(d["NVDA_ER"], x).fit()
 
 
 # ── PLOTLY THEME ──────────────────────────────────────────────────────────────
-PLOT_BG   = "#09090f"
-PAPER_BG  = "#09090f"
-GRID_COL  = "rgba(255,255,255,0.05)"
-ACCENT    = "#7655ff"
-GREEN     = "#4ade80"
-RED       = "#f87171"
-FONT_FAM  = "DM Sans, sans-serif"
-
-def base_layout(**kwargs):
-    return dict(
-        plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
-        font=dict(family=FONT_FAM, color="#9999bb", size=11),
-        xaxis=dict(gridcolor=GRID_COL, zeroline=False,
-                   showline=False, tickfont=dict(size=10)),
-        yaxis=dict(gridcolor=GRID_COL, zeroline=False,
-                   showline=False, tickfont=dict(size=10)),
-        margin=dict(l=16, r=16, t=48, b=16),
-        **kwargs
+def style(fig: go.Figure, height: int = 380, **kwargs) -> go.Figure:
+    layout = dict(
+        height=height,
+        plot_bgcolor=BG, paper_bgcolor=BG,
+        font=dict(family="IBM Plex Sans, sans-serif", color=MUTED, size=12),
+        margin=dict(l=8, r=8, t=40, b=8),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor=SURFACE, bordercolor=BORDER, font=dict(color=TEXT)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, bgcolor="rgba(0,0,0,0)"),
     )
+    fig.update_layout(**{**layout, **kwargs})
+    fig.update_xaxes(gridcolor=GRID, zeroline=False, showline=False, automargin=True)
+    fig.update_yaxes(gridcolor=GRID, zeroline=False, showline=False, automargin=True)
+    return fig
+
+
+def show(fig: go.Figure):
+    st.plotly_chart(fig, width="stretch", theme=None, config={"displayModeBar": False})
+
+
+def section(num: str, title: str, text: str = ""):
+    st.markdown(
+        f'<div class="section"><div class="num">{num}</div><h2>{title}</h2>'
+        + (f"<p>{text}</p>" if text else "") + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def pct(x: float, d: int = 1) -> str:
+    return f"{x * 100:+,.{d}f}%" if x < 0 or x > 0 else f"{0:.{d}f}%"
+
+
+def stars(p: float) -> str:
+    return "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MAIN APP
 # ═══════════════════════════════════════════════════════════════════════════════
+try:
+    full = load_data(EXCEL_PATH)
+except FileNotFoundError:
+    st.error(
+        f"File **{EXCEL_PATH.name}** not found. Run `NVIDIA.ipynb` first and place "
+        "`nvda_analysis.xlsx` next to this script."
+    )
+    st.stop()
 
-# ── HERO HEADER ──────────────────────────────────────────────────────────────
-st.markdown("""
+if full.empty:
+    st.error("The Excel file is empty or corrupted. Re-run the notebook.")
+    st.stop()
+
+# ── CONTROLS ─────────────────────────────────────────────────────────────────
+PERIODS = {"1Y": 1, "3Y": 3, "5Y": 5, "Max": None}
+WINDOWS = {"3M": 63, "6M": 126, "1Y": 252}
+
+c_period, c_window, c_log = st.columns([2, 2, 1], vertical_alignment="bottom")
+with c_period:
+    period = st.segmented_control("Period", list(PERIODS), default="Max", required=True)
+with c_window:
+    win_label = st.segmented_control("Rolling window", list(WINDOWS), default="1Y", required=True)
+with c_log:
+    log_scale = st.toggle("Log scale", value=True)
+
+years = PERIODS[period]
+end = full.index.max()
+start = full.index.min() if years is None else max(full.index.min(), end - pd.DateOffset(years=years))
+df = full.loc[start:]
+window = WINDOWS[win_label]
+
+m_nvda = risk_metrics(df["nvda"], df["nvda_x"])
+m_mkt  = risk_metrics(df["mkt"], df["mkt_x"])
+model  = run_capm(df)
+alpha, beta = model.params["const"], model.params["MKT_ER"]
+p_alpha = model.pvalues["const"]
+r2 = model.rsquared
+
+# ── HERO ─────────────────────────────────────────────────────────────────────
+st.markdown(f"""
 <div class="hero">
-  <div class="hero-tag">Equity Analysis Report · NASDAQ</div>
-  <div class="hero-title">NVIDIA Corporation</div>
-  <div class="hero-subtitle">
-    Performance · Risk · CAPM Regression &nbsp;·&nbsp; Jan 2016 – Apr 2026
+  <div>
+    <div class="ticker">NASDAQ: NVDA · Equity analysis</div>
+    <h1>NVIDIA Corporation</h1>
+    <div class="sub">Performance, risk and CAPM regression · daily data
+      {df.index.min():%b %Y} – {df.index.max():%b %Y} · market = Fama-French US market</div>
+  </div>
+  <div class="hero-stat">
+    <div class="v">{pct(m_nvda['total_ret'], 0)}</div>
+    <div class="l">total return over the period · market {pct(m_mkt['total_ret'], 0)}</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── LOAD DATA ─────────────────────────────────────────────────────────────────
-try:
-    with st.spinner("Caricamento dati da nvda_analysis.xlsx…"):
-        prices, df = load_from_excel(EXCEL_PATH)
-except FileNotFoundError:
-    st.error(
-        f"❌ File **{EXCEL_PATH}** non trovato. "
-        "Esegui prima il notebook `NVIDIA.ipynb` per generarlo, "
-        "poi metti `nvda_analysis.xlsx` nella stessa cartella di questo script."
+# ══════════════════════════════════════════════════════════════════════════════
+# 01 · PERFORMANCE OVERVIEW
+# ══════════════════════════════════════════════════════════════════════════════
+section("01", "Performance overview",
+        "NVDA compared with the US equity market over the selected period. "
+        "Returns include the risk-free rate; Sharpe and Sortino use excess returns.")
+
+kpis = [
+    ("CAGR",              pct(m_nvda["cagr"]),            pct(m_mkt["cagr"])),
+    ("Volatility (ann.)", f"{m_nvda['vol']*100:.1f}%",    f"{m_mkt['vol']*100:.1f}%"),
+    ("Sharpe ratio",      f"{m_nvda['sharpe']:.2f}",      f"{m_mkt['sharpe']:.2f}"),
+    ("Sortino ratio",     f"{m_nvda['sortino']:.2f}",     f"{m_mkt['sortino']:.2f}"),
+    ("Max drawdown",      pct(m_nvda["max_dd"]),          pct(m_mkt["max_dd"])),
+    ("VaR 95% (1 day)",   pct(m_nvda["var95"], 2),        pct(m_mkt["var95"], 2)),
+    ("CVaR 95% (1 day)",  pct(m_nvda["cvar95"], 2),       pct(m_mkt["cvar95"], 2)),
+    ("CAPM beta",         f"{beta:.2f}",                  "1.00"),
+]
+st.markdown(
+    '<div class="kpi-grid four">'
+    + "".join(
+        f'<div class="kpi"><div class="l">{l}</div><div class="v">{v}</div>'
+        f'<div class="m">Market <b>{m}</b></div></div>'
+        for l, v, m in kpis
     )
-    st.stop()
-
-if df.empty:
-    st.error("Il file Excel è vuoto o corrotto. Riesegui il notebook.")
-    st.stop()
-
-metrics = compute_metrics(df["ER"], df["RF"])
-model   = run_capm(df)
-alpha   = model.params["const"]
-beta    = model.params["Mkt-Rf"]
-r2      = model.rsquared
-p_alpha = model.pvalues["const"]
-p_beta  = model.pvalues["Mkt-Rf"]
+    + "</div>",
+    unsafe_allow_html=True,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 1 · KPI OVERVIEW
+# 02 · GROWTH & DRAWDOWN
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="section-label">01 · Performance Overview</div>',
-            unsafe_allow_html=True)
+section("02", "Growth of $1 and drawdowns",
+        "Value of $1 invested at the start of the period, and the percentage loss from the previous peak.")
 
-kpi_data = [
-    ("Expected Return (Ann.)", f"{metrics['cagr']*100:.1f}%", "positive",
-     "CAGR degli excess return annualizzati"),
-    ("Volatility (Ann.)",      f"{metrics['vol']*100:.1f}%",  "negative",
-     "Deviazione standard annualizzata"),
-    ("Sharpe Ratio",           f"{metrics['sharpe']:.3f}",    "neutral",
-     "Rendimento aggiustato per il rischio"),
-    ("Sortino Ratio",          f"{metrics['sortino']:.3f}",   "neutral",
-     "Penalizza solo la volatilità negativa"),
-    ("Max Drawdown",           f"{metrics['max_dd']*100:.1f}%", "negative",
-     "Massima perdita dal picco"),
-    ("VaR 5% (Daily)",         f"{metrics['var5']*100:.2f}%", "negative",
-     "Perdita massima giornaliera al 95%"),
-]
+wealth_n = (1 + df["nvda"]).cumprod()
+wealth_m = (1 + df["mkt"]).cumprod()
+dd_n, dd_m = drawdown(df["nvda"]) * 100, drawdown(df["mkt"]) * 100
 
-cols = st.columns(6)
-for col, (label, value, cls, sub) in zip(cols, kpi_data):
-    with col:
-        st.markdown(f"""
-        <div class="kpi-card">
-          <div class="kpi-label">{label}</div>
-          <div class="kpi-value {cls}">{value}</div>
-          <div class="kpi-sub">{sub}</div>
-        </div>""", unsafe_allow_html=True)
-
-# ── Distribution moments ──────────────────────────────────────────────────────
-st.markdown('<div class="section-label" style="margin-top:28px">02 · Momenti della Distribuzione</div>',
-            unsafe_allow_html=True)
-
-mom_cols = st.columns(4)
-moments = [
-    ("Mean (Daily)", f"{df['ER'].mean():.3f}%",   "positive", "Eccesso di rendimento medio"),
-    ("Std Dev",      f"{df['ER'].std():.3f}%",    "neutral",  "Deviazione standard giornaliera"),
-    ("Skewness",     f"{metrics['skew']:.3f}",    "neutral",  "Asimmetria positiva → code destre"),
-    ("Excess Kurtosis", f"{metrics['kurt']:.3f}", "negative", "Code spesse → fat-tail risk"),
-]
-for col, (label, val, cls, sub) in zip(mom_cols, moments):
-    with col:
-        st.markdown(f"""
-        <div class="kpi-card">
-          <div class="kpi-label">{label}</div>
-          <div class="kpi-value {cls}">{val}</div>
-          <div class="kpi-sub">{sub}</div>
-        </div>""", unsafe_allow_html=True)
-
-st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.68, 0.32], vertical_spacing=0.04)
+fig.add_trace(go.Scatter(x=wealth_n.index, y=wealth_n, name="NVDA",
+                         line=dict(color=NVDA_COL, width=2),
+                         hovertemplate="$%{y:,.2f}"), row=1, col=1)
+fig.add_trace(go.Scatter(x=wealth_m.index, y=wealth_m, name="Market",
+                         line=dict(color=MKT_COL, width=1.6),
+                         hovertemplate="$%{y:,.2f}"), row=1, col=1)
+fig.add_trace(go.Scatter(x=dd_n.index, y=dd_n, name="NVDA drawdown", showlegend=False,
+                         line=dict(color=NEG, width=1), fill="tozeroy",
+                         fillcolor="rgba(255,107,107,0.15)", hovertemplate="%{y:.1f}%"), row=2, col=1)
+fig.add_trace(go.Scatter(x=dd_m.index, y=dd_m, name="Market drawdown", showlegend=False,
+                         line=dict(color=MKT_COL, width=1, dash="dot"),
+                         hovertemplate="%{y:.1f}%"), row=2, col=1)
+style(fig, height=560)
+fig.update_yaxes(type="log" if log_scale else "linear", tickprefix="$", row=1, col=1)
+fig.update_yaxes(ticksuffix="%", row=2, col=1)
+show(fig)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2 · PRICE & RETURNS CHARTS
+# 03 · ANNUAL RETURNS
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="section-label">03 · Andamento Prezzi e Rendimenti</div>',
-            unsafe_allow_html=True)
+section("03", "Calendar-year returns",
+        "Compounded total return in each calendar year. Partial years are marked YTD or as a partial start.")
+
+yr_n = (1 + df["nvda"]).groupby(df.index.year).prod() - 1
+yr_m = (1 + df["mkt"]).groupby(df.index.year).prod() - 1
+counts = df.groupby(df.index.year).size()
+labels = []
+for y in yr_n.index:
+    if y == df.index.max().year and df.index.max().month < 12:
+        labels.append(f"{y} YTD")
+    elif y == df.index.min().year and df.index.min().month > 1:
+        labels.append(f"{y}*")
+    else:
+        labels.append(str(y))
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=labels, y=yr_n * 100, name="NVDA", marker_color=NVDA_COL,
+                     text=[f"{v*100:+.0f}%" for v in yr_n], textposition="outside",
+                     textfont=dict(size=11, color=TEXT), hovertemplate="%{y:.1f}%"))
+fig.add_trace(go.Bar(x=labels, y=yr_m * 100, name="Market", marker_color=MKT_COL,
+                     hovertemplate="%{y:.1f}%"))
+style(fig, height=380, barmode="group", bargap=0.25)
+fig.update_xaxes(type="category")
+fig.update_yaxes(ticksuffix="%")
+show(fig)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 04 · ROLLING RISK
+# ══════════════════════════════════════════════════════════════════════════════
+section("04", f"Rolling risk · {win_label} window",
+        "Annualised volatility and CAPM beta estimated on a moving window, to show how risk changes over time.")
+
+# Calcolato su tutto il campione, poi tagliato: la finestra ha storia anche all'inizio del periodo
+roll_vol_n = full["nvda"].rolling(window).std() * np.sqrt(TRADING_DAYS) * 100
+roll_vol_m = full["mkt"].rolling(window).std() * np.sqrt(TRADING_DAYS) * 100
+roll_beta  = full["NVDA_ER"].rolling(window).cov(full["MKT_ER"]) / full["MKT_ER"].rolling(window).var()
 
 c1, c2 = st.columns(2)
-
 with c1:
-    fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(
-        x=prices.index, y=prices["Adj Close"],
-        line=dict(color=ACCENT, width=1.6),
-        fill="tozeroy",
-        fillcolor="rgba(118,85,255,0.08)",
-        name="Adj Close",
-    ))
-    price_min = prices["Adj Close"].min()
-    price_max = prices["Adj Close"].max()
-    fig_price.update_layout(
-        title=dict(text="Adj Close Price · NVDA (2016–2026)",
-                   font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-        **base_layout(),
-        yaxis_title="USD ($)",
-        yaxis_range=[price_min * 0.95, price_max * 1.05],
-        hovermode="x unified",
-    )
-    st.plotly_chart(fig_price, use_container_width=True)
-
+    st.markdown('<div class="chart-title">Annualised volatility</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=roll_vol_n.loc[start:], name="NVDA",
+                             line=dict(color=NVDA_COL, width=1.8), hovertemplate="%{y:.1f}%"))
+    fig.add_trace(go.Scatter(x=df.index, y=roll_vol_m.loc[start:], name="Market",
+                             line=dict(color=MKT_COL, width=1.5), hovertemplate="%{y:.1f}%"))
+    style(fig)
+    fig.update_yaxes(ticksuffix="%")
+    show(fig)
 with c2:
-    colors = [GREEN if v >= 0 else RED for v in df["ER"]]
-    fig_er = go.Figure()
-    fig_er.add_trace(go.Bar(
-        x=df.index, y=df["ER"],
-        marker_color=colors, name="Excess Return",
-        marker_line_width=0,
-    ))
-    fig_er.update_layout(
-        title=dict(text="Excess Return Giornaliero · NVDA",
-                   font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-        **base_layout(),
-        yaxis_title="ER (%)",
-        hovermode="x unified",
-        bargap=0,
-    )
-    st.plotly_chart(fig_er, use_container_width=True)
+    st.markdown('<div class="chart-title">CAPM beta</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_hline(y=1, line=dict(color=FAINT, dash="dot", width=1))
+    fig.add_hline(y=beta, line=dict(color=AMBER, dash="dash", width=1),
+                  annotation_text=f"full-period β = {beta:.2f}", annotation_font_color=AMBER,
+                  annotation_position="top left")
+    fig.add_trace(go.Scatter(x=df.index, y=roll_beta.loc[start:], name="Rolling β",
+                             line=dict(color=NVDA_COL, width=1.8), hovertemplate="%{y:.2f}"))
+    style(fig, showlegend=False)
+    show(fig)
 
-# Drawdown chart ──────────────────────────────────────────────────────────────
-rets_dec = df["ER"] / 100
-cum      = (1 + rets_dec).cumprod()
-roll_max = cum.cummax()
-drawdown = (cum - roll_max) / roll_max * 100
+# ══════════════════════════════════════════════════════════════════════════════
+# 05 · DISTRIBUTION
+# ══════════════════════════════════════════════════════════════════════════════
+section("05", "Return distribution",
+        "Daily excess returns compared with a normal distribution with the same mean and variance.")
 
-fig_dd = go.Figure()
-fig_dd.add_trace(go.Scatter(
-    x=drawdown.index, y=drawdown,
-    line=dict(color=RED, width=1.2),
-    fill="tozeroy", fillcolor="rgba(248,113,113,0.1)",
-    name="Drawdown",
-))
-fig_dd.update_layout(
-    title=dict(text="Drawdown — NVDA (2016–2026)",
-               font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-    **base_layout(),
-    yaxis_title="Drawdown (%)",
-    hovermode="x unified",
+er = df["NVDA_ER"].values
+jb_stat, jb_p = stats.jarque_bera(er)
+moments = [
+    ("Mean (daily)",     f"{er.mean():+.3f}%"),
+    ("Std dev (daily)",  f"{er.std(ddof=1):.3f}%"),
+    ("Skewness",         f"{stats.skew(er):.2f}"),
+    ("Excess kurtosis",  f"{stats.kurtosis(er):.2f}"),
+    ("Jarque-Bera p",    "< 0.001" if jb_p < 0.001 else f"{jb_p:.3f}"),
+]
+st.markdown(
+    '<div class="kpi-grid">'
+    + "".join(f'<div class="kpi"><div class="l">{l}</div><div class="v">{v}</div></div>' for l, v in moments)
+    + "</div>",
+    unsafe_allow_html=True,
 )
-st.plotly_chart(fig_dd, use_container_width=True)
-
-st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 · DISTRIBUTION ANALYSIS
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="section-label">04 · Analisi della Distribuzione</div>',
-            unsafe_allow_html=True)
 
 c3, c4 = st.columns(2)
-
 with c3:
-    er_vals = df["ER"].dropna().values
-    x_axis  = np.linspace(er_vals.min(), er_vals.max(), 500)
-    mu, sigma = er_vals.mean(), er_vals.std()
-    normal_y  = norm.pdf(x_axis, mu, sigma)
-    kde_obj   = stats.gaussian_kde(er_vals)
-    kde_y     = kde_obj(x_axis)
-
-    fig_hist = go.Figure()
-    fig_hist.add_trace(go.Histogram(
-        x=er_vals, histnorm="probability density",
-        nbinsx=90,
-        marker=dict(color="rgba(118,85,255,0.55)", line=dict(color=PLOT_BG, width=0.3)),
-        name="ER dist.",
-    ))
-    fig_hist.add_trace(go.Scatter(
-        x=x_axis, y=normal_y,
-        line=dict(color=RED, width=2, dash="dash"),
-        name="Normale teorica",
-    ))
-    fig_hist.add_trace(go.Scatter(
-        x=x_axis, y=kde_y,
-        line=dict(color=GREEN, width=2),
-        name="KDE empirica",
-    ))
-    fig_hist.update_layout(
-        title=dict(text="Distribuzione Excess Returns + KDE vs Normale",
-                   font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-        **base_layout(),
-        barmode="overlay",
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
-        yaxis_title="Densità",
-        xaxis_title="ER (%)",
-    )
-    st.plotly_chart(fig_hist, use_container_width=True)
-
+    st.markdown('<div class="chart-title">Histogram vs normal</div>', unsafe_allow_html=True)
+    x_axis = np.linspace(er.min(), er.max(), 500)
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=er, histnorm="probability density", nbinsx=120, name="Observed",
+                               marker=dict(color="rgba(118,185,0,0.45)", line=dict(width=0))))
+    fig.add_trace(go.Scatter(x=x_axis, y=stats.norm.pdf(x_axis, er.mean(), er.std()), name="Normal",
+                             line=dict(color=MKT_COL, width=2, dash="dash")))
+    fig.add_trace(go.Scatter(x=x_axis, y=stats.gaussian_kde(er)(x_axis), name="Kernel density",
+                             line=dict(color=NVDA_COL, width=2)))
+    style(fig, barmode="overlay", hovermode="closest")
+    fig.update_xaxes(ticksuffix="%")
+    show(fig)
 with c4:
-    (osm, osr), (slope, intercept, r) = stats.probplot(er_vals, dist="norm")
+    st.markdown('<div class="chart-title">Q-Q plot</div>', unsafe_allow_html=True)
+    (osm, osr), (slope, intercept, _) = stats.probplot(er, dist="norm")
     qq_x = np.array([osm.min(), osm.max()])
-    qq_y = slope * qq_x + intercept
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(x=osm, y=osr, mode="markers", name="Observed quantiles",
+                               marker=dict(color=NVDA_COL, size=4, opacity=0.6)))
+    fig.add_trace(go.Scatter(x=qq_x, y=slope * qq_x + intercept, name="Normal line",
+                             line=dict(color=MKT_COL, width=2, dash="dash")))
+    style(fig, hovermode="closest")
+    fig.update_xaxes(title="Theoretical quantiles")
+    fig.update_yaxes(title="Observed quantiles (%)")
+    show(fig)
 
-    fig_qq = go.Figure()
-    fig_qq.add_trace(go.Scatter(
-        x=osm, y=osr,
-        mode="markers",
-        marker=dict(color=ACCENT, size=3, opacity=0.6),
-        name="Quantili osservati",
-    ))
-    fig_qq.add_trace(go.Scatter(
-        x=qq_x, y=qq_y,
-        line=dict(color=RED, width=2, dash="dash"),
-        name="Linea normale",
-    ))
-    fig_qq.update_layout(
-        title=dict(text="Q-Q Plot — NVDA Excess Returns",
-                   font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-        **base_layout(),
-        xaxis_title="Quantili teorici (Normale)",
-        yaxis_title="Quantili osservati",
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
-    )
-    st.plotly_chart(fig_qq, use_container_width=True)
-
-st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 4 · CAPM REGRESSION
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="section-label">05 · CAPM Regression Analysis</div>',
-            unsafe_allow_html=True)
-
-col_scatter, col_results = st.columns([1, 1])
-
-with col_scatter:
-    sample = df.sample(min(len(df), 1000), random_state=42).sort_index()
-    x_fit  = np.linspace(df["Mkt-Rf"].min(), df["Mkt-Rf"].max(), 300)
-    y_fit  = alpha + beta * x_fit
-
-    fig_sc = go.Figure()
-    fig_sc.add_trace(go.Scatter(
-        x=sample["Mkt-Rf"], y=sample["ER"],
-        mode="markers",
-        marker=dict(color=ACCENT, size=4, opacity=0.45,
-                    line=dict(color="rgba(255,255,255,0.1)", width=0.5)),
-        name="Osservazioni",
-    ))
-    fig_sc.add_trace(go.Scatter(
-        x=x_fit, y=y_fit,
-        line=dict(color=RED, width=2.5),
-        name=f"SML fit (β={beta:.2f})",
-    ))
-    fig_sc.add_hline(y=0, line=dict(color="rgba(255,255,255,0.12)", dash="dot", width=1))
-    fig_sc.add_vline(x=0, line=dict(color="rgba(255,255,255,0.12)", dash="dot", width=1))
-    fig_sc.update_layout(
-        title=dict(text="NVDA vs Mercato — Scatter CAPM",
-                   font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-        **base_layout(),
-        xaxis_title="Mkt-RF (Excess Return Mercato, %)",
-        yaxis_title="ER NVDA (%)",
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
-    )
-    st.plotly_chart(fig_sc, use_container_width=True)
-
-with col_results:
-    st.markdown("#### Risultati OLS — CAPM")
-
-    def stars(p):
-        if p < 0.001: return "***"
-        if p < 0.01:  return "**"
-        if p < 0.05:  return "*"
-        return ""
-
-    st.markdown(f"""
-    <table class="reg-table">
-      <thead>
-        <tr>
-          <th>Parametro</th><th>Coeff.</th><th>Std Err</th>
-          <th>t-stat</th><th>P-value</th><th>Sig.</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Alpha (α)</td>
-          <td>{model.params['const']:.4f}</td>
-          <td>{model.bse['const']:.4f}</td>
-          <td>{model.tvalues['const']:.3f}</td>
-          <td>{model.pvalues['const']:.4f}</td>
-          <td class="sig">{stars(model.pvalues['const'])}</td>
-        </tr>
-        <tr>
-          <td>Beta (β)</td>
-          <td>{model.params['Mkt-Rf']:.4f}</td>
-          <td>{model.bse['Mkt-Rf']:.4f}</td>
-          <td>{model.tvalues['Mkt-Rf']:.3f}</td>
-          <td>{model.pvalues['Mkt-Rf']:.4f}</td>
-          <td class="sig">{stars(model.pvalues['Mkt-Rf'])}</td>
-        </tr>
-      </tbody>
-    </table>
-    <br>
-    <table class="reg-table">
-      <thead><tr><th>Goodness-of-Fit</th><th>Valore</th></tr></thead>
-      <tbody>
-        <tr><td>R²</td><td>{model.rsquared:.4f}</td></tr>
-        <tr><td>R² Adjusted</td><td>{model.rsquared_adj:.4f}</td></tr>
-        <tr><td>F-statistic</td><td>{model.fvalue:.1f}</td></tr>
-        <tr><td>Prob(F-stat)</td><td>{model.f_pvalue:.2e}</td></tr>
-        <tr><td>Durbin-Watson</td><td>{sm.stats.stattools.durbin_watson(model.resid):.3f}</td></tr>
-        <tr><td>N. Osservazioni</td><td>{int(model.nobs)}</td></tr>
-      </tbody>
-    </table>
-    <br>
-    <div style="font-size:11px;color:#55556a;">
-      *** p&lt;0.001 &nbsp;·&nbsp; ** p&lt;0.01 &nbsp;·&nbsp; * p&lt;0.05
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    interp_alpha = "positivo e statisticamente significativo (α = {:.4f}, p = {:.4f}): NVDA ha generato un excess return sistematico rispetto al CAPM.".format(alpha, p_alpha)
-    interp_beta  = "β = {:.2f} indica che NVDA è un titolo ad alta sensibilità al mercato: per ogni 1% di movimento del mercato, NVDA si muove mediamente del {:.1f}%.".format(beta, beta)
-    st.markdown(f"""
-    <div class="info-box">
-      <b style="color:#a78bfa">Alpha:</b> {interp_alpha}<br><br>
-      <b style="color:#a78bfa">Beta:</b> {interp_beta}<br><br>
-      <b style="color:#a78bfa">R²:</b> Il modello CAPM spiega il {r2*100:.1f}% della varianza dei rendimenti di NVDA.
-      Il restante {(1-r2)*100:.1f}% è attribuibile a fattori idiosincratici.
-    </div>
-    """, unsafe_allow_html=True)
-
-st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 · ROLLING BETA
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<div class="section-label">06 · Rolling Beta (252 giorni)</div>',
-            unsafe_allow_html=True)
-
-window = 252
-rolling_betas = []
-for i in range(window, len(df) + 1):
-    chunk = df.iloc[i - window: i]
-    x_  = sm.add_constant(chunk["Mkt-Rf"])
-    b_  = sm.OLS(chunk["ER"], x_).fit().params["Mkt-Rf"]
-    rolling_betas.append((df.index[i - 1], b_))
-
-rb_df = pd.DataFrame(rolling_betas, columns=["Date", "Beta"]).set_index("Date")
-
-fig_rb = go.Figure()
-fig_rb.add_hline(y=1, line=dict(color="rgba(255,255,255,0.2)", dash="dot", width=1))
-fig_rb.add_trace(go.Scatter(
-    x=rb_df.index, y=rb_df["Beta"],
-    line=dict(color=ACCENT, width=1.8),
-    fill="tozeroy", fillcolor="rgba(118,85,255,0.07)",
-    name="Beta (rolling 252gg)",
-))
-fig_rb.update_layout(
-    title=dict(text="Beta Rolling 1 Anno — NVDA vs Market",
-               font=dict(family="DM Serif Display, serif", size=16, color="#d0d0e8")),
-    **base_layout(),
-    yaxis_title="Beta",
-    hovermode="x unified",
+tail_note = (
+    "Points far from the line in both tails mean extreme days happen far more often than a normal "
+    "distribution predicts (fat tails), so normal-based risk measures understate the real risk."
+    if stats.kurtosis(er) > 1 else
+    "Tails are close to normal over this period."
 )
-st.plotly_chart(fig_rb, use_container_width=True)
+st.markdown(f'<div class="note">{tail_note}</div>', unsafe_allow_html=True)
 
-st.markdown('<div class="fancy-divider"></div>', unsafe_allow_html=True)
+# ══════════════════════════════════════════════════════════════════════════════
+# 06 · CAPM REGRESSION
+# ══════════════════════════════════════════════════════════════════════════════
+section("06", "CAPM regression",
+        "OLS of NVDA daily excess returns on market excess returns: "
+        "R<sub>NVDA</sub> − R<sub>f</sub> = α + β (R<sub>M</sub> − R<sub>f</sub>) + ε")
+
+col_sc, col_tab = st.columns([1.1, 1])
+with col_sc:
+    x_fit = np.linspace(df["MKT_ER"].min(), df["MKT_ER"].max(), 100)
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(x=df["MKT_ER"], y=df["NVDA_ER"], mode="markers", name="Daily observations",
+                               marker=dict(color=NVDA_COL, size=4, opacity=0.35),
+                               hovertemplate="Market %{x:.2f}%<br>NVDA %{y:.2f}%<extra></extra>"))
+    fig.add_trace(go.Scatter(x=x_fit, y=alpha + beta * x_fit, name=f"Characteristic line (β = {beta:.2f})",
+                             line=dict(color=AMBER, width=2.5), hoverinfo="skip"))
+    style(fig, height=430, hovermode="closest")
+    fig.update_xaxes(title="Market excess return (%)", zeroline=True, zerolinecolor=BORDER)
+    fig.update_yaxes(title="NVDA excess return (%)", zeroline=True, zerolinecolor=BORDER)
+    show(fig)
+
+with col_tab:
+    rows = [("Alpha (α, daily %)", "const"), ("Beta (β)", "MKT_ER")]
+    body = "".join(
+        f"<tr><td>{name}</td><td>{model.params[k]:.4f}</td><td>{model.bse[k]:.4f}</td>"
+        f"<td>{model.tvalues[k]:.2f}</td><td>{model.pvalues[k]:.4f}</td>"
+        f'<td class="sig">{stars(model.pvalues[k])}</td></tr>'
+        for name, k in rows
+    )
+    alpha_ann = (1 + alpha / 100) ** TRADING_DAYS - 1
+    st.markdown(f"""
+    <table class="reg-table">
+      <thead><tr><th>Parameter</th><th>Coef.</th><th>Std. err.</th><th>t</th><th>p-value</th><th></th></tr></thead>
+      <tbody>{body}</tbody>
+    </table>
+    <table class="reg-table">
+      <tbody>
+        <tr><td>Alpha, annualised</td><td>{pct(alpha_ann)}</td></tr>
+        <tr><td>R² / adjusted R²</td><td>{r2:.3f} / {model.rsquared_adj:.3f}</td></tr>
+        <tr><td>Durbin-Watson</td><td>{sm.stats.stattools.durbin_watson(model.resid):.2f}</td></tr>
+        <tr><td>Observations</td><td>{int(model.nobs):,}</td></tr>
+      </tbody>
+    </table>
+    <div style="font-size:11.5px;color:{FAINT};margin:-4px 0 14px;">*** p&lt;0.001 · ** p&lt;0.01 · * p&lt;0.05</div>
+    """, unsafe_allow_html=True)
+
+    if p_alpha < 0.05:
+        alpha_txt = (f"<b>Alpha</b> is {'positive' if alpha > 0 else 'negative'} and significant "
+                     f"(p = {p_alpha:.4f}), about {pct(alpha_ann)} a year: NVDA "
+                     f"{'beat' if alpha > 0 else 'lagged'} what its market exposure alone would explain.")
+    else:
+        alpha_txt = (f"<b>Alpha</b> is not statistically different from zero (p = {p_alpha:.2f}): "
+                     "over this period NVDA's return is explained by its market exposure.")
+    beta_txt = (f"<b>Beta</b> of {beta:.2f}: on average, a 1% market move goes with a "
+                f"{beta:.1f}% move in NVDA, so the stock "
+                f"{'amplifies' if beta > 1 else 'dampens'} market swings.")
+    r2_txt = (f"<b>R²</b> of {r2*100:.0f}%: the market explains {r2*100:.0f}% of NVDA's daily variance; "
+              f"the remaining {(1-r2)*100:.0f}% is company-specific risk.")
+    st.markdown(f'<div class="note">{alpha_txt}<br><br>{beta_txt}<br><br>{r2_txt}</div>',
+                unsafe_allow_html=True)
 
 # ── FOOTER ────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="text-align:center; color:#33334a; font-size:11px; padding:24px 0 8px;
-            font-family:'JetBrains Mono',monospace; letter-spacing:1px;">
-  NVDA · INVESTMENT ANALYSIS DASHBOARD &nbsp;·&nbsp;
-  FONTE DATI: NVIDIA.ipynb → nvda_analysis.xlsx &nbsp;·&nbsp;
-  PERIODO 2016–2026
+st.markdown(f"""
+<div class="footer">
+  <b>Data.</b> NVDA adjusted close prices from Yahoo Finance; market excess return (Mkt-RF) and risk-free rate
+  from the Kenneth French Data Library. Pre-computed in <code>NVIDIA.ipynb</code> and loaded from
+  <code>nvda_analysis.xlsx</code>.<br>
+  <b>Definitions.</b> VaR and CVaR are historical (5th percentile of daily total returns and the mean beyond it).
+  Rolling beta = rolling covariance / rolling market variance. Annualisation uses {TRADING_DAYS} trading days.<br>
+  Code: <a href="{GITHUB_URL}" target="_blank">{GITHUB_URL.replace('https://', '')}</a>
 </div>
 """, unsafe_allow_html=True)
