@@ -24,6 +24,9 @@ For each company, the workflow is:
 |---|---|---|---|---|
 | NVIDIA Corporation | NVDA | Jan 2016 – Apr 2026 | `NVIDIA/NVIDIA.ipynb` | [🚀 Launch Dashboard](https://return-analysis-nvidia-1.streamlit.app) |
 
+![Daily NVDA excess returns vs market excess returns, with the fitted CAPM line.](images/nvda_capm_scatter.png)
+*Daily NVDA excess returns vs market excess returns, with the fitted CAPM line.*
+
 ---
 
 ## Methodology
