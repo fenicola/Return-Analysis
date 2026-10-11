@@ -22,10 +22,24 @@ For each company, the workflow is:
 
 | Company | Ticker | Period | Notebook | Dashboard |
 |---|---|---|---|---|
-| NVIDIA Corporation | NVDA | Jan 2016 – Apr 2026 | `NVIDIA/NVIDIA.ipynb` | [🚀 Launch Dashboard](https://return-analysis-nvidia-1.streamlit.app) |
+| NVIDIA Corporation | NVDA | Jan 2016 – Feb 2026 | `NVIDIA/NVIDIA.ipynb` | [🚀 Launch Dashboard](https://return-analysis-nvidia-1.streamlit.app) |
+
+![Dashboard overview: NVDA vs the US market over the full period.](images/dashboard_overview.png)
+*Dashboard overview: NVDA vs the US market over the full period.*
+
+### What the dashboard shows
+
+- **Performance overview**: CAGR, volatility, Sharpe, Sortino, max drawdown, VaR and CVaR, each compared with the market
+- **Growth of $1 and drawdowns**: NVDA vs the market, linear or log scale
+- **Calendar-year returns**
+- **Rolling risk**: annualised volatility and CAPM beta on a 3-month, 6-month or 1-year window
+- **Return distribution**: histogram vs normal, Q-Q plot, moments and Jarque-Bera test
+- **CAPM regression**: scatter with the characteristic line, OLS table, annualised alpha and a plain-language reading of the results
+
+Every number updates with the selected period (1Y, 3Y, 5Y, Max).
 
 ![Daily NVDA excess returns vs market excess returns, with the fitted CAPM line.](images/nvda_capm_scatter.png)
-*Daily NVDA excess returns vs market excess returns, with the fitted CAPM line.*
+*From the notebook: daily NVDA excess returns vs market excess returns, with the fitted CAPM line.*
 
 ---
 
@@ -38,11 +52,11 @@ For each company, the workflow is:
 ### Metrics computed
 - **Distributional moments**: mean, standard deviation, skewness, excess kurtosis
 - **Performance**: CAGR, annualized volatility, Sharpe ratio, Sortino ratio
-- **Risk**: maximum drawdown, historical VaR at 5% and 1% (daily)
-- **CAPM regression** (OLS): alpha, beta, R², t-statistics, p-values, Durbin-Watson
-- **Rolling beta**: 252-day window to capture time-varying market sensitivity
+- **Risk**: maximum drawdown, historical VaR and CVaR at 95% (daily)
+- **CAPM regression** (OLS): alpha (daily and annualised), beta, R², t-statistics, p-values, Durbin-Watson
+- **Rolling volatility and beta**: moving-window estimates to capture time-varying risk
 
-All performance metrics are computed via [`quantstats`](https://github.com/ranaroussi/quantstats), ensuring consistency between the notebook output and the dashboard display.
+The notebook uses [`quantstats`](https://github.com/ranaroussi/quantstats). The dashboard computes the same metrics directly with NumPy so that it can recompute them for any period; VaR and CVaR are historical, and CAGR and drawdowns use total returns (excess return + risk-free rate).
 
 ---
 
@@ -53,6 +67,7 @@ Return_Analysis/
 └── NVIDIA/
     ├── NVIDIA.ipynb          # Research notebook
     ├── nvda_analysis.xlsx    # Output of the notebook (data source for dashboard)
+    ├── requirements.txt      # Notebook dependencies
     └── dashboard/
         ├── nvda_dashboard.py # Streamlit app
         ├── nvda_analysis.xlsx
@@ -81,7 +96,7 @@ The dashboard reads `nvda_analysis.xlsx` from its own folder — no live data do
 
 ## Stack
 
-`Python` · `pandas` · `numpy` · `yfinance` · `statsmodels` · `quantstats` · `scipy` · `plotly` · `streamlit` · `openpyxl`
+`Python` · `pandas` · `numpy` · `yfinance` · `statsmodels` · `quantstats` (notebook) · `scipy` · `plotly` · `streamlit` · `openpyxl`
 
 ---
 
